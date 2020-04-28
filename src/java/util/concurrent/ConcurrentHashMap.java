@@ -1007,29 +1007,56 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     }
 
     /** Implementation for put and putIfAbsent */
+    /*
+     * 当添加一对键值对的时候，首先会去判断保存这些键值对的数组是不是初始化了，
+     * 如果没有的话就初始化数组
+     *  然后通过计算hash值来确定放在数组的哪个位置
+     * 如果这个位置为空则直接添加，如果不为空的话，则取出这个节点来
+     * 如果取出来的节点的hash值是MOVED(-1)的话，则表示当前正在对这个数组进行扩容，复制到新的数组，则当前线程也去帮助复制
+     * 最后一种情况就是，如果这个节点，不为空，也不在扩容，则通过synchronized来加锁，进行添加操作
+     *    然后判断当前取出的节点位置存放的是链表还是树
+     *    如果是链表的话，则遍历整个链表，直到取出来的节点的key来个要放的key进行比较，如果key相等，并且key的hash值也相等的话，
+     *          则说明是同一个key，则覆盖掉value，否则的话则添加到链表的末尾
+     *    如果是树的话，则调用putTreeVal方法把这个元素添加到树中去
+     *  最后在添加完成之后，会判断在该节点处共有多少个节点（注意是添加前的个数），如果达到8个以上了的话，
+     *  则调用treeifyBin方法来尝试将处的链表转为树，或者扩容数组
+     */
     final V putVal(K key, V value, boolean onlyIfAbsent) {
         if (key == null || value == null) throw new NullPointerException();
-        int hash = spread(key.hashCode());
-        int binCount = 0;
+        int hash = spread(key.hashCode());//两次hash，减少hash冲突，可以均匀分布
+        int binCount = 0;//用来记录链表长度
+        //这里其实就是自旋操作，当出现线程竞争时不断自旋
         for (Node<K,V>[] tab = table;;) {
             Node<K,V> f; int n, i, fh;
+            // 1.如果数组为空，则进行数组初始化,属于懒汉模式初始化
             if (tab == null || (n = tab.length) == 0)
                 tab = initTable();
+            // 2. 通过 hash 值对应的数组下标得到第一个
+                // 以 volatile 读的方式来读取 table 数组中的元素，保证每次拿到的数据都是最新的
             else if ((f = tabAt(tab, i = (n - 1) & hash)) == null) {
+                //如果该下标返回的节点为空，则直接通过 cas 将新的值封装成 node 插入即可；
+                //  如果 cas 失败，说明存在竞争，则进入下一次循环
                 if (casTabAt(tab, i, null,
                              new Node<K,V>(hash, key, value, null)))
                     break;                   // no lock when adding to empty bin
             }
+            // 3. 不为空,如果在进行扩容，则先进行扩容操作
             else if ((fh = f.hash) == MOVED)
+                // 协助扩容
                 tab = helpTransfer(tab, f);
+            // 4. 如果以上条件都不满足，就在当前位置的链表里面处理,要进行加锁操作，
+                // 也就是存在hash冲突，锁住链表或者红黑树的头结点
             else {
                 V oldVal = null;
-                synchronized (f) {
-                    if (tabAt(tab, i) == f) {
+                synchronized (f) {//给对应的头结点加锁
+                    if (tabAt(tab, i) == f) {//再次判断对应下标位置是否为 f 节点
+                        // 4.1 头结点的 hash 值大于 0，说明是链表
                         if (fh >= 0) {
-                            binCount = 1;
+                            binCount = 1;//用来记录链表的长度
+                            //遍历链表
                             for (Node<K,V> e = f;; ++binCount) {
                                 K ek;
+                                // 4.1.1如果发现相同的 key，则判断是否需要进行值的覆盖
                                 if (e.hash == hash &&
                                     ((ek = e.key) == key ||
                                      (ek != null && key.equals(ek)))) {
@@ -1038,6 +1065,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                         e.val = value;
                                     break;
                                 }
+                                // 4.1.2 一直遍历到链表的最末端，直接把新的值加入到链表的最后面
                                 Node<K,V> pred = e;
                                 if ((e = e.next) == null) {
                                     pred.next = new Node<K,V>(hash, key,
@@ -1046,11 +1074,14 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                 }
                             }
                         }
+                        // 4.2 红黑树 处理
                         else if (f instanceof TreeBin) {
                             Node<K,V> p;
                             binCount = 2;
+                            //则调用红黑树的插入方法插入新的值
                             if ((p = ((TreeBin<K,V>)f).putTreeVal(hash, key,
                                                            value)) != null) {
+                                //同样，如果值已经存在，则直接替换
                                 oldVal = p.val;
                                 if (!onlyIfAbsent)
                                     p.val = value;
@@ -1058,15 +1089,19 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                         }
                     }
                 }
+                //如果链表的长度大于8时就会进行红黑树的转换
                 if (binCount != 0) {
+                    //如果链表长度已经达到临界值 8 就需要把链表转换为树结构
                     if (binCount >= TREEIFY_THRESHOLD)
                         treeifyBin(tab, i);
+                    //如果 val 是被替换的，则返回替换之前的值
                     if (oldVal != null)
                         return oldVal;
                     break;
                 }
             }
         }
+        // 元素个数 + 1
         addCount(1L, binCount);
         return null;
     }
@@ -2253,39 +2288,71 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      * @param x the count to add
      * @param check if <0, don't check resize, if <= 1 only check if uncontended
      */
+    //x 表示这次需要在表中增加的元素个数，
+//check 参数表示是否需要进行扩容检查，大于等于 0都需要进行检查
     private final void addCount(long x, int check) {
         CounterCell[] as; long b, s;
-        if ((as = counterCells) != null ||
-            !U.compareAndSwapLong(this, BASECOUNT, b = baseCount, s = b + x)) {
+        // 1. 判断 counterCells 是否为空
+          // counterCells为空，说明没有竞争，则尝试直接修改baseCount
+        if ((as = counterCells) != null
+                || !U.compareAndSwapLong(this, BASECOUNT, b = baseCount, s = b + x)) {
+            // 说明cas 失败了，
             CounterCell a; long v; int m;
+            //是否冲突标识，默认为没有冲突
             boolean uncontended = true;
-            if (as == null || (m = as.length - 1) < 0 ||
-                (a = as[ThreadLocalRandom.getProbe() & m]) == null ||
-                !(uncontended =
+            if (as == null
+                    || (m = as.length - 1) < 0
+                    || (a = as[ThreadLocalRandom.getProbe() & m]) == null
+                    // 走到这个逻辑，说明 a != null,尝试更新 对应cell 里买的  value  + 1
+                    || !(uncontended =
                   U.compareAndSwapLong(a, CELLVALUE, v = a.value, v + x))) {
+                // 说明 更新失败了？
                 fullAddCount(x, uncontended);
                 return;
             }
+
             if (check <= 1)
                 return;
+            // 说明更新成功了，后面直接 sumCount
             s = sumCount();
         }
+        // 2. 不为空，则检查是否扩容
         if (check >= 0) {
             Node<K,V>[] tab, nt; int n, sc;
-            while (s >= (long)(sc = sizeCtl) && (tab = table) != null &&
-                   (n = tab.length) < MAXIMUM_CAPACITY) {
+            //s 标识集合大小，如果集合大小大于或等于扩容阈值（默认值的 0.75）
+            //并且 table 不为空并且 table 的长度小于最大容量
+            while (s >= (long)(sc = sizeCtl)
+                    && (tab = table) != null
+                    && (n = tab.length) < MAXIMUM_CAPACITY) {
+                //这里是生成一个唯一的扩容戳，表示本次扩容的标记，类似于zk的epoch
                 int rs = resizeStamp(n);
+                // 2.1 sc<0，也就是 sizeCtl<0，说明已经有别的线程正在扩容了
                 if (sc < 0) {
-                    if ((sc >>> RESIZE_STAMP_SHIFT) != rs || sc == rs + 1 ||
-                        sc == rs + MAX_RESIZERS || (nt = nextTable) == null ||
-                        transferIndex <= 0)
+                    // 五种情况，不需要帮忙扩容
+                    // 1. sc >>> RESIZE_STAMP_SHIFT!=rs 表示比较 RESIZE_STAMP_BITS位生成戳和 rs 是否相等,确定是不是本次扩容
+                    // 2. sc=rs+1 表示扩容结束
+                    // 3.sc==rs+MAX_RESIZERS 表示帮助线程线程已经达到最大值了
+                    // 4.nt=nextTable=null,，扩容了临时表==null，表示扩容已经结束
+                    // 5. transferIndex<=0 表示所有的 transfer 任务都被领取完了，
+                            // 没有剩余的hash 桶来给自己自己好这个线程来做 transfer
+                    if ((sc >>> RESIZE_STAMP_SHIFT) != rs
+                            || sc == rs + 1
+                            || sc == rs + MAX_RESIZERS
+                            || (nt = nextTable) == null
+                            || transferIndex <= 0)
                         break;
+                    // 当前线程尝试帮助此次扩容，cas修改库容线程数 ，如果成功，则调用 transfer
                     if (U.compareAndSwapInt(this, SIZECTL, sc, sc + 1))
+                        // 协助扩容
                         transfer(tab, nt);
                 }
+                // 2.2  如果当前没有在扩容，那么 rs 肯定是一个正数，
+                // 通过 rs<<RESIZE_STAMP_SHIFT 将 sc 设置为一个负数， +2 表示有一个线程在执行扩容
                 else if (U.compareAndSwapInt(this, SIZECTL, sc,
                                              (rs << RESIZE_STAMP_SHIFT) + 2))
                     transfer(tab, null);
+
+                // 2.3 重新计数，判断是否需要开启下一轮扩容
                 s = sumCount();
             }
         }
