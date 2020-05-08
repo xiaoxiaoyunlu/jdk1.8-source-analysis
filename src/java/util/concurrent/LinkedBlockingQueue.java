@@ -328,14 +328,17 @@ public class LinkedBlockingQueue<E> extends AbstractQueue<E>
      * @throws InterruptedException {@inheritDoc}
      * @throws NullPointerException {@inheritDoc}
      */
+    // 队尾添加元素，队列 满了就阻塞
     public void put(E e) throws InterruptedException {
+        // 禁止添加null元素
         if (e == null) throw new NullPointerException();
-        // Note: convention in all put/take/etc is to preset local var
-        // holding count negative to indicate failure unless set.
+        // 预先设置 c 的值为 -1，表示失败
         int c = -1;
+        // 构造新节点
         Node<E> node = new Node<E>(e);
         final ReentrantLock putLock = this.putLock;
         final AtomicInteger count = this.count;
+        // 获取 put 锁 可中断
         putLock.lockInterruptibly();
         try {
             /*
@@ -346,17 +349,28 @@ public class LinkedBlockingQueue<E> extends AbstractQueue<E>
              * signalled if it ever changes from capacity. Similarly
              * for all other uses of count in other wait guards.
              */
+            // 队列满了
+            // 当前线程阻塞，等待其他线程的唤醒（其他线程 take 成功后就会唤醒此处线程）
             while (count.get() == capacity) {
+                // 无限期等待
                 notFull.await();
             }
+            // 新增到队列尾部
             enqueue(node);
+            // 获取当前的队列数
             c = count.getAndIncrement();
+            // 如果队列未满，
             if (c + 1 < capacity)
+                //尝试唤醒一个put的等待线程
                 notFull.signal();
         } finally {
+            // 释放 put锁
             putLock.unlock();
         }
+        //当入队前的节点数是0时，可能线程阻塞在take()方法
+        //唤醒一个
         if (c == 0)
+            //
             signalNotEmpty();
     }
 
@@ -431,23 +445,32 @@ public class LinkedBlockingQueue<E> extends AbstractQueue<E>
         return c >= 0;
     }
 
+    // 从队列头部获取一个元素，队列为空，则阻塞，必须要其他线程唤醒
     public E take() throws InterruptedException {
         E x;
+        // 默认负数
         int c = -1;
+        // 当前链表的个数
         final AtomicInteger count = this.count;
         final ReentrantLock takeLock = this.takeLock;
+        //获取读锁
         takeLock.lockInterruptibly();
         try {
+            // 当队列为空时，阻塞，等待其他线程唤醒
             while (count.get() == 0) {
                 notEmpty.await();
             }
+            // 从队列的头部拿出一个元素
             x = dequeue();
+            //减一操作，C比真实的队列数据大一
             c = count.getAndDecrement();
+            // c 大于 0 ，表示队列有值，可以唤醒之前被阻塞的读线程
             if (c > 1)
                 notEmpty.signal();
         } finally {
             takeLock.unlock();
         }
+        // 队列满了，可以唤醒 put 等待线程~
         if (c == capacity)
             signalNotFull();
         return x;

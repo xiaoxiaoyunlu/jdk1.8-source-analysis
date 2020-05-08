@@ -2588,11 +2588,11 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                 else
                                     hn = new Node<K,V>(ph, pk, pv, hn);
                             }
-                            // 遍历完成，则  ln 必须要移动，还是放在临时tab i 位置
+                            // 遍历完成，则  ln 放在临时tab i 位置
                             setTabAt(nextTab, i, ln);
-                            // 遍历完成，则  ln 必须要移动，还是放在临时tab i+n 位置
+                            // 遍历完成，则  hn 放在临时tab i+n 位置
                             setTabAt(nextTab, i + n, hn);
-                            // 表示老的tab里面 i 位置 处理过了
+                            // 表示老的tab里面 i 位置 处理过了，设置当前节点为fwd
                             setTabAt(tab, i, fwd);
                             advance = true;
                         }

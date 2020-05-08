@@ -292,6 +292,7 @@ public class PriorityQueue<E> extends AbstractQueue<E>
     private void grow(int minCapacity) {
         int oldCapacity = queue.length;
         // Double size if small; else grow by 50%
+        // 小于64 ，则增加一倍  大于则 增加 0.5倍
         int newCapacity = oldCapacity + ((oldCapacity < 64) ?
                                          (oldCapacity + 2) :
                                          (oldCapacity >> 1));
@@ -341,6 +342,7 @@ public class PriorityQueue<E> extends AbstractQueue<E>
         size = i + 1;
         if (i == 0)
             queue[0] = e;
+        // 找合适的顺序 ？
         else
             siftUp(i, e);
         return true;
@@ -585,14 +587,22 @@ public class PriorityQueue<E> extends AbstractQueue<E>
 
     @SuppressWarnings("unchecked")
     public E poll() {
+        // 队列为空，则返回null
         if (size == 0)
             return null;
+        // 长度 减 1
         int s = --size;
+        // 修改次数 + 1
         modCount++;
+        // 获取 队列头部元素
         E result = (E) queue[0];
+        // 获取队列 尾部 元素
         E x = (E) queue[s];
+        // 尾部置空
         queue[s] = null;
+        // 如果不是头部元素，则
         if (s != 0)
+            //从尾部开始调整
             siftDown(0, x);
         return result;
     }
@@ -691,16 +701,21 @@ public class PriorityQueue<E> extends AbstractQueue<E>
     }
 
     @SuppressWarnings("unchecked")
+    // 该方法的作用是从k指定的位置开始，将x逐层向下与当前点的左右孩子中较小的那个交换，
+    // 直到x小于或等于左右孩子中的任何一个为止
     private void siftDownComparable(int k, E x) {
         Comparable<? super E> key = (Comparable<? super E>)x;
         int half = size >>> 1;        // loop while a non-leaf
         while (k < half) {
-            int child = (k << 1) + 1; // assume left child is least
+            //首先找到左右孩子中较小的那个，记录到c里，并用child记录其下标
+            int child = (k << 1) + 1;
             Object c = queue[child];
             int right = child + 1;
+            // 获取 左右孩子中 较小的那个 赋值给c
             if (right < size &&
                 ((Comparable<? super E>) c).compareTo((E) queue[right]) > 0)
                 c = queue[child = right];
+
             if (key.compareTo((E) c) <= 0)
                 break;
             queue[k] = c;
